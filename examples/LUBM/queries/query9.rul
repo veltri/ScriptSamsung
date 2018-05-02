@@ -1,0 +1,1 @@
+Student(X),Faculty(Y),Course(Z),advisor(X,Y),takesCourse(X,Z),teacherOf(Y,Z)?

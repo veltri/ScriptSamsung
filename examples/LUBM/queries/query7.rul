@@ -1,0 +1,1 @@
+Student(X),Course(Y),teacherOf("http://www.Department0.University0.edu/AssociateProfessor0",Y),takesCourse(X,Y)?

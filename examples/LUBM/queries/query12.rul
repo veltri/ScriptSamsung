@@ -1,0 +1,1 @@
+Chair(X),Department(Y),worksFor(X,Y),subOrganizationOf(Y,"http://www.University0.edu")?

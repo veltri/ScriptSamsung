@@ -7,17 +7,22 @@ from os import listdir
 from os.path import isfile, join, getsize
 from optparse import OptionParser
 import subprocess
+from sys import stdout, stderr
 
-basePath = os.path.dirname(sys.argv[0])
-execFolder="solvers"
-tmpFolder="tmp"
-tboxFolder="tbox"
-aboxFolder="abox"
-resultFilename="result.txt"
-dlv = "dlv"
-dlvEx = "dlvEx"
-owl2dpm = "owl2dpm.jar"
-tstore2facts = "tstore2facts.jar"
+__basePath = os.path.dirname(sys.argv[0])
+__execFolder = "solvers"
+__tmpFolder = "tmp"
+__tboxFolder = "tbox"
+__aboxFolder = "abox"
+__resultFilename = "results.txt"
+__relevPredsFilename = "relevPreds.txt"
+__dlv = "dlv"
+__dlvSK = "dlv"
+__dlvEx = "dlvEx"
+__owl2dpm = "owl2dpm.jar"
+__tstore2facts = "tstore2facts.jar"
+__skolemizeScript = "skolemize.py"
+__dlvRelevPreds = "dlvRelevPreds"
 
 def errorMessage(msg):
     sys.stderr.write("Error: "+msg.__str__()+"\n")
@@ -47,47 +52,103 @@ def manageOptions():
                       help="run DLV under the brave assumption (valid only in 'asp' mode)")
     return parser.parse_args()
 
-def manageFolders(folderName):
-    folderPath = os.path.abspath(folderName)
+def getBenchFolder(benchFolder):
+    folderPath = os.path.abspath(benchFolder)
     localFolderName = os.path.abspath(os.path.join(folderPath, os.pardir)).__str__().replace("/","_")
-    localFolderPath = os.path.join(basePath,tmpFolder,localFolderName)
-    if os.path.exists(localFolderPath):
-        subprocess.call(["rm","-r",localFolderPath])
-    if not os.path.exists(os.path.join(basePath,tmpFolder)):
-        subprocess.call(["mkdir",os.path.join(basePath,tmpFolder)])
-    subprocess.call(["mkdir",localFolderPath])
+    localFolderPath = os.path.join(__basePath,__tmpFolder,localFolderName)
     return localFolderPath
 
-def processTBox(inputFolder,outputFolder,formalism):
+def manageBenchFolders(inputFolderName,outputFolderName):
+    localFolderPath = getBenchFolder(inputFolderName)
+    if os.path.exists(os.path.join(localFolderPath,outputFolderName)):
+        subprocess.call(["rm","-r",os.path.join(localFolderPath,outputFolderName)])
+    if not os.path.exists(os.path.join(__basePath,__tmpFolder)):
+        subprocess.call(["mkdir",os.path.join(__basePath,__tmpFolder)])
+    if not os.path.exists(localFolderPath):
+        subprocess.call(["mkdir",localFolderPath])
+    subprocess.call(["mkdir",os.path.join(localFolderPath,outputFolderName)])
+    return os.path.join(localFolderPath,outputFolderName)
+
+def processTBox(inputFolder,formalism):
     if not os.path.isdir(inputFolder):
         errorMessage(inputFolder.__str__()+" is not a valid folder")
-    
+    outputFolder = manageBenchFolders(inputFolder,__tboxFolder)
     inputPath = os.path.abspath(inputFolder)    
-    subprocess.call(["mkdir",os.path.join(outputFolder,tboxFolder)])
-    execPath = os.path.join(execFolder,owl2dpm)
+    execPath = os.path.join(__execFolder,__owl2dpm)
     for file in os.listdir(inputPath):
         srcFile = os.path.join(inputPath,file)
-        trgFile = os.path.join(outputFolder,tboxFolder,file.__str__().replace(".owl","_owl")+".rul")
+        trgFile = os.path.join(outputFolder,file.__str__().replace(".owl","_owl")+".rul")
         subprocess.call(["java","-jar",execPath,srcFile,trgFile])
+    return outputFolder
 
-def processABox(inputFolder,outputFolder,formalism):
+def processABox(inputFolder,formalism):
     if not os.path.isdir(inputFolder):
         errorMessage(inputFolder.__str__()+" is not a valid folder")
-    
+    outputFolder = manageBenchFolders(inputFolder,__aboxFolder) 
     inputPath = os.path.abspath(inputFolder)
-    subprocess.call(["mkdir",os.path.join(outputFolder,aboxFolder)])
-    execPath = os.path.join(execFolder,tstore2facts)
-    localABoxFolder = os.path.join(outputFolder,aboxFolder,"/")
-    print("java -jar "+execPath+" "+inputPath+" "+localABoxFolder)
-    subprocess.call(["java","-Xmx8192m","-DentityExpansionLimit=100000000","-jar",execPath,inputPath,localABoxFolder])
+    execPath = os.path.join(__execFolder,__tstore2facts)
+    subprocess.call(["java","-Xmx8192m","-DentityExpansionLimit=100000000","-jar",execPath,inputPath,outputFolder])
+    return outputFolder
+
+def checkRunningFolder(inputFolder,outputFolder):
+    localFolderPath = getBenchFolder(inputFolder)
+    if os.path.exists(os.path.join(localFolderPath,outputFolder)):
+        return os.path.join(localFolderPath,outputFolder)
+    if not os.path.exists(os.path.join(__basePath,__tmpFolder)):
+        subprocess.call(["mkdir",os.path.join(__basePath,__tmpFolder)])
+    if not os.path.exists(localFolderPath):
+        subprocess.call(["mkdir",localFolderPath])
+    subprocess.call(["mkdir",os.path.join(localFolderPath,outputFolder)])
+    for file in os.listdir(inputFolder):
+        subprocess.call(["cp",os.path.join(inputFolder,file),os.path.join(localFolderPath,outputFolder,file)])
+    return os.path.join(localFolderPath,outputFolder)
+
+def obqa(approach,rulFolder,dataFolder,queryFile):
+    if approach == "pchase":
+        execPath = os.path.join(__execFolder,__dlvEx)
+        rulFiles = [os.path.join(rulFolder,fpath) for fpath in os.listdir(rulFolder)]
+        dataFiles = [os.path.join(dataFolder,fpath) for fpath in os.listdir(dataFolder)]
+        inputDLVEx = [execPath]+rulFiles+dataFiles+[queryFile]+["-cautious","-silent","-nofinitecheck","-ODMS+"]
+        with open(os.path.join(__basePath,__resultFilename),'w+') as resultFile:
+            subprocess.call(inputDLVEx,stdout=resultFile)
+    elif approach == "skdlv":
+        rulFiles = [os.path.join(rulFolder,fpath) for fpath in os.listdir(rulFolder)]
+        #skolemize the input ontology
+        skPath = os.path.join(__execFolder,__skolemizeScript)
+        skRulFiles = []
+        for file in rulFiles:
+            skFile = file.__str__()+"__sk__"
+            subprocess.call([skPath,file,skFile])
+            skRulFiles.append(skFile)
+        #compute relevant predicates
+        dlvRelevPredsPath = os.path.join(__execFolder,__dlvRelevPreds)
+        with open(os.path.join(__basePath,__tmpFolder,__relevPredsFilename),'w+') as relevPredsFile:
+            subprocess.call([dlvRelevPredsPath]+rulFiles+[queryFile]+["-cautious","-silent","-nofinitecheck"],stderr=relevPredsFile)
+        with open(os.path.join(__basePath,__tmpFolder,__relevPredsFilename)) as relevPredsFile:
+            relevPredsList = [line.strip("\n") for line in relevPredsFile]
+            #filter out any data file not relevant for the query at hand
+            dataFiles = [os.path.join(dataFolder,fpath) for fpath in os.listdir(dataFolder) if fpath[:-5] in relevPredsList]
+            #skolemize the input query: TODO!!!
+            dlvSKPath = os.path.join(__execFolder,__dlvSK)
+            inputDLVSK = [dlvSKPath]+skRulFiles+dataFiles+[queryFile]+["-cautious","-silent","-nofinitecheck","-ODMS+"]
+            with open(os.path.join(__basePath,__resultFilename),'w+') as resultFile:
+                subprocess.call(inputDLVSK,stdout=resultFile)
+        #delete temporary files
+        subprocess.call(["rm",os.path.join(__basePath,__tmpFolder,__relevPredsFilename)])
+        for skFile in skRulFiles:
+            subprocess.call(["rm",skFile])
+    else:
+        errorMessage("Approach not supported yet")
+    
 
 if __name__ == '__main__':    
     (option,args) = manageOptions()
     optionList = [o for o in sys.argv[1:] if o.__str__().startswith("-")]
-    if len(optionList) == 0: #run DLV
+    
+    if len(optionList) == 0: #no options, hence run DLV
         print("Running... ",end='')
         runningStart = time.time()
-        execPath = os.path.join(basePath,execFolder,dlv)
+        execPath = os.path.join(__basePath,__execFolder,__dlv)
         params = [execPath] + ['-silent'] + sys.argv[1:]
         subprocess.call(params)
         runningEnd = time.time()
@@ -98,6 +159,7 @@ if __name__ == '__main__':
         errorMessage("execution mode not set")
     if len(args) > 0:
         errorMessage("commands not found ({})".format(args))
+        
     print("Started...")
     #######___OBQA mode___#######
     if option.mode == "obqa":    
@@ -106,28 +168,28 @@ if __name__ == '__main__':
         if option.inputFormalism == None and option.run == None:
             errorMessage("neither 'import' nor 'run' command specified in 'obqa' mode")
         
-        print("Input preprocessing... ",end='')
+        rulFolder=None
+        dataFolder=None
+        
+        print("Input pre-processing... ",end='')
         importStart = time.time()
         if option.inputFormalism != None:
             if option.inputFormalism != "owl" and option.inputFormalism != "dpm":
                 errorMessage("input formalism not known")
-            if (option.tbox == None or option.abox == None) and option.kb == None:
-                errorMessage("no input folders (tbox, abox or kb)")
-            if option.kb != None and (option.tbox != None or option.abox != None):
-                errorMessage("kb and abox/tbox folders names cannot be specified together")
-        
-            localFolderPath = None
+            if option.inputFormalism == "owl" and (option.tbox == None or option.abox == None):
+                errorMessage("no input folders (tbox or abox)")
+            if option.inputFormalism == "owl" and option.kb != None:
+                errorMessage("--kb option cannot be specified when input is in OWL (use --tbox and --abox options)")
+            if option.inputFormalism == "dpm" and option.kb != None and (option.tbox != None or option.abox != None):
+                errorMessage("--kb option cannot be specified together with --tbox or --abox options")
+                        
+            #manage input knowledge base
             if option.tbox != None:
-                localFolderPath = manageFolders(option.tbox)
-            elif option.abox != None:
-                localFolderPath = manageFolders(option.abox)
-                
-            if option.tbox != None:
-                processTBox(option.tbox,localFolderPath,option.inputFormalism)
+                rulFolder = processTBox(option.tbox,option.inputFormalism)
             if option.abox != None:
-                processABox(option.abox,localFolderPath,option.inputFormalism)
+                dataFolder = processABox(option.abox,option.inputFormalism)
             if option.kb != None:
-                processKB(option.kb,option.inputFormalism)
+                processKB(option.kb)
             importEnd = time.time()
             print("Completed in "+str('%.3f'%(importEnd-importStart))+" secs")
         else:
@@ -145,7 +207,11 @@ if __name__ == '__main__':
             if option.query == None:
                 errorMessage("no input query")
             
-            obqa(option.run)
+            if rulFolder == None:
+                rulFolder = checkRunningFolder(option.tbox,__tboxFolder)
+            if dataFolder == None:
+                dataFolder = checkRunningFolder(option.abox,__aboxFolder)
+            obqa(option.run,rulFolder,dataFolder,option.query)
             runningEnd = time.time()
             print("Completed in "+str('%.3f'%(runningEnd-runningStart))+" secs")
         else:
@@ -153,9 +219,12 @@ if __name__ == '__main__':
     
     #######___CLEAR_WORKSPACE mode___#######
     elif option.mode == "clear-workspace":
-        tmpFolderPath = os.path.join(basePath,tmpFolder)
+        runningStart = time.time()
+        tmpFolderPath = os.path.join(__basePath,__tmpFolder)
         if os.path.exists(tmpFolderPath):
             subprocess.call(["rm","-r",tmpFolderPath])
+        runningEnd = time.time()
+        print("Completed in "+str('%.3f'%(runningEnd-runningStart))+" secs")
 
     #######___ASP_mode___#######
     elif option.mode == "asp":
@@ -178,11 +247,12 @@ if __name__ == '__main__':
     
     #######___LOAD_RESULTS_mode___#######
     elif option.mode == "load-results":
-        basePath = os.dir.path.dirname(sys.args[0])
-        resultPath = os.path.join(basePath,execFolder,tmpFolder,resultFilename)
+        runningStart = time.time()
+        resultPath = os.path.join(__basePath,__resultFilename)
         os.system("gedit "+resultPath)
+        runningEnd = time.time()
+        print("Completed in "+str('%.3f'%(runningEnd-runningStart))+" secs")
         sys.exit()
-        
     else:
         errorMessage("execution mode not known")
         
